@@ -114,10 +114,13 @@ def get_window_text_content(max_depth: int = 3) -> dict:
 def list_all_windows() -> list:
     """
     Lists all visible open windows (width/height > 0) with their titles and positions.
+    Includes detected dialogs/child windows.
     """
     windows = []
     try:
-        for window in auto.GetRootControl().GetChildren():
+        root = auto.GetRootControl()
+        for window in root.GetChildren():
+            # Check top-level window
             if (window.ControlTypeName == 'Window' or window.ControlTypeName == 'WindowControl') and window.Name:
                 try:
                     rect = window.BoundingRectangle
@@ -128,6 +131,22 @@ def list_all_windows() -> list:
                             "position": {"x": rect.left, "y": rect.top},
                             "size": {"width": rect.width(), "height": rect.height()}
                         })
+                except:
+                    pass
+                
+                # Check for immediate child windows (dialogs)
+                try:
+                    for child in window.GetChildren():
+                        if child.ControlTypeName == 'WindowControl' and child.Name:
+                            c_rect = child.BoundingRectangle
+                            if c_rect.width() > 0 and c_rect.height() > 0:
+                                windows.append({
+                                    "title": child.Name,
+                                    "class": child.ClassName,
+                                    "position": {"x": c_rect.left, "y": c_rect.top},
+                                    "size": {"width": c_rect.width(), "height": c_rect.height()},
+                                    "parent": window.Name
+                                })
                 except:
                     pass
     except Exception as e:
@@ -166,9 +185,15 @@ def _find_element(text: str, control_type: str = None) -> list:
             pass
     
     try:
+        # First try active window
         window = auto.GetForegroundControl()
         if window:
             search_element(window)
+        
+        # If nothing found, try from root (depth-limited)
+        if not results:
+            search_element(auto.GetRootControl(), depth=2) # Start deeper to avoid infinite root recursion
+            
         return results if results else [{"message": f"No elements found containing '{text}'"}]
     except Exception as e:
         return [{"error": str(e)}]
@@ -219,11 +244,20 @@ def focus_window(title: str) -> str:
     """
     title_lower = title.lower()
     try:
-        for window in auto.GetRootControl().GetChildren():
+        root = auto.GetRootControl()
+        for window in root.GetChildren():
             if (window.ControlTypeName == 'Window' or window.ControlTypeName == 'WindowControl') and window.Name:
                 if title_lower in window.Name.lower():
                     window.SetFocus()
                     return f"Focused window: {window.Name}"
+                
+                # Check children (dialogs)
+                for child in window.GetChildren():
+                    if child.ControlTypeName == 'WindowControl' and child.Name:
+                        if title_lower in child.Name.lower():
+                            child.SetFocus()
+                            return f"Focused window: {child.Name} (child of {window.Name})"
+                            
         return f"No window found matching '{title}'"
     except Exception as e:
         return f"Error: {str(e)}"
