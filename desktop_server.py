@@ -34,12 +34,7 @@ def get_active_window() -> dict:
 @mcp.tool()
 def get_window_text_content(max_depth: int = 3) -> dict:
     """
-    Gets all readable text content from the active window.
-    This is the PRIMARY way to understand what's on screen - use this instead of screenshots!
-    Returns structured text content from UI elements.
-    
-    Args:
-        max_depth: How deep to traverse the UI tree (default 3, max 5)
+    Gets text content from the active window.
     """
     max_depth = min(max_depth, 5)
     
@@ -48,52 +43,40 @@ def get_window_text_content(max_depth: int = 3) -> dict:
             return None
         
         try:
+            # Skip invisible elements
+            try:
+                rect = element.BoundingRectangle
+                if rect.width() == 0 or rect.height() == 0:
+                    return None
+            except:
+                pass
+
             info = {}
             name = element.Name
             control_type = element.ControlTypeName
             
-            # Only include elements with meaningful content
-            if name or control_type in ['Edit', 'Text', 'Button', 'ListItem', 'MenuItem', 'TreeItem', 'TabItem', 'Document']:
-                info['type'] = control_type
-                if name:
-                    info['text'] = name[:500]  # Limit text length
-                
-                # Get value for editable controls
-                if control_type == 'Edit':
-                    try:
-                        value_pattern = element.GetValuePattern()
-                        if value_pattern:
-                            info['value'] = value_pattern.Value[:500]
-                    except:
-                        pass
-                
-                # Get position for interactive elements
-                if control_type in ['Button', 'Edit', 'ListItem', 'MenuItem', 'TabItem', 'Link', 'CheckBox', 'RadioButton']:
-                    try:
-                        rect = element.BoundingRectangle
-                        info['clickable_at'] = {
-                            "x": rect.left + rect.width() // 2,
-                            "y": rect.top + rect.height() // 2
-                        }
-                    except:
-                        pass
-                
-                # Get children
-                if depth < max_depth:
-                    children = []
-                    try:
-                        for child in element.GetChildren():
-                            child_info = get_element_info(child, depth + 1)
-                            if child_info:
-                                children.append(child_info)
-                    except:
-                        pass
-                    if children:
-                        info['children'] = children
-                
-                return info if (name or children if 'children' in info else False) else None
+            if name:
+                info['text'] = name[:200]
             
-            # Even if this element has no name, check children
+            if control_type == 'Edit':
+                try:
+                    value_pattern = element.GetValuePattern()
+                    if value_pattern:
+                        val = value_pattern.Value
+                        if val: info['value'] = val[:200]
+                except:
+                    pass
+            
+            if control_type in ['Button', 'Edit', 'ListItem', 'MenuItem', 'TabItem', 'Link', 'CheckBox', 'RadioButton']:
+                try:
+                    rect = element.BoundingRectangle
+                    info['clickable_at'] = {
+                        "x": rect.left + rect.width() // 2,
+                        "y": rect.top + rect.height() // 2
+                    }
+                except:
+                    pass
+            
             if depth < max_depth:
                 children = []
                 try:
@@ -104,7 +87,12 @@ def get_window_text_content(max_depth: int = 3) -> dict:
                 except:
                     pass
                 if children:
-                    return {'children': children}
+                    info['children'] = children
+            
+            # Only return if meaningful content
+            if 'text' in info or 'value' in info or 'children' in info:
+                info['type'] = control_type
+                return info
             
             return None
         except:
@@ -115,49 +103,39 @@ def get_window_text_content(max_depth: int = 3) -> dict:
         if not window:
             return {"error": "No active window"}
         
-        result = {
-            "window_title": window.Name or "",
-            "window_class": window.ClassName or "",
+        return {
+            "title": window.Name or "",
             "content": get_element_info(window)
         }
-        return result
     except Exception as e:
         return {"error": str(e)}
 
 @mcp.tool()
 def list_all_windows() -> list:
     """
-    Lists all open windows with their titles and positions.
-    Useful for finding and switching to specific applications.
+    Lists all visible open windows (width/height > 0) with their titles and positions.
     """
     windows = []
     try:
         for window in auto.GetRootControl().GetChildren():
-            if window.ControlTypeName == 'Window' and window.Name:
+            if (window.ControlTypeName == 'Window' or window.ControlTypeName == 'WindowControl') and window.Name:
                 try:
                     rect = window.BoundingRectangle
-                    windows.append({
-                        "title": window.Name,
-                        "class": window.ClassName,
-                        "position": {"x": rect.left, "y": rect.top},
-                        "size": {"width": rect.width(), "height": rect.height()}
-                    })
+                    if rect.width() > 0 and rect.height() > 0:
+                        windows.append({
+                            "title": window.Name,
+                            "class": window.ClassName,
+                            "position": {"x": rect.left, "y": rect.top},
+                            "size": {"width": rect.width(), "height": rect.height()}
+                        })
                 except:
-                    windows.append({"title": window.Name, "class": window.ClassName})
+                    pass
     except Exception as e:
         return [{"error": str(e)}]
     return windows
 
-@mcp.tool()
-def find_element(text: str, control_type: str = None) -> list:
-    """
-    Finds UI elements containing the specified text in the active window.
-    Returns clickable coordinates for each match.
-    
-    Args:
-        text: Text to search for (case-insensitive partial match)
-        control_type: Optional filter by type (Button, Edit, Text, ListItem, MenuItem, etc.)
-    """
+def _find_element(text: str, control_type: str = None) -> list:
+    """Helper function for finding elements."""
     results = []
     text_lower = text.lower()
     
@@ -196,6 +174,18 @@ def find_element(text: str, control_type: str = None) -> list:
         return [{"error": str(e)}]
 
 @mcp.tool()
+def find_element(text: str, control_type: str = None) -> list:
+    """
+    Finds UI elements containing the specified text in the active window.
+    Returns clickable coordinates for each match.
+    
+    Args:
+        text: Text to search for (case-insensitive partial match)
+        control_type: Optional filter by type (Button, Edit, Text, ListItem, MenuItem, etc.)
+    """
+    return _find_element(text, control_type)
+
+@mcp.tool()
 def click_element(text: str, control_type: str = None) -> str:
     """
     Finds and clicks an element by its text content.
@@ -205,12 +195,15 @@ def click_element(text: str, control_type: str = None) -> str:
         text: Text of the element to click (case-insensitive partial match)
         control_type: Optional filter (Button, MenuItem, ListItem, Link, etc.)
     """
-    elements = find_element(text, control_type)
+    elements = _find_element(text, control_type)
     
     if elements and 'click_x' in elements[0]:
         x, y = elements[0]['click_x'], elements[0]['click_y']
-        pyautogui.click(x, y)
-        return f"Clicked '{elements[0]['text']}' at ({x}, {y})"
+        try:
+            pyautogui.click(x, y)
+            return f"Clicked '{elements[0]['text']}' at ({x}, {y})"
+        except Exception as e:
+            return f"Error clicking: {str(e)}"
     elif elements and 'error' in elements[0]:
         return f"Error: {elements[0]['error']}"
     else:
@@ -227,7 +220,7 @@ def focus_window(title: str) -> str:
     title_lower = title.lower()
     try:
         for window in auto.GetRootControl().GetChildren():
-            if window.ControlTypeName == 'Window' and window.Name:
+            if (window.ControlTypeName == 'Window' or window.ControlTypeName == 'WindowControl') and window.Name:
                 if title_lower in window.Name.lower():
                     window.SetFocus()
                     return f"Focused window: {window.Name}"
@@ -252,89 +245,82 @@ def get_mouse_position() -> dict:
 # --- Mouse Control ---
 
 @mcp.tool()
-def move_mouse(x: int, y: int) -> str:
-    """Moves the mouse cursor to the specified (x, y) coordinates."""
-    pyautogui.moveTo(x, y)
-    return f"Moved mouse to ({x}, {y})"
-
-@mcp.tool()
-def click_mouse(x: int = None, y: int = None, button: str = 'left') -> str:
+def mouse_action(action: str, x: int = None, y: int = None, button: str = 'left', clicks: int = 1, duration: float = 0.5) -> str:
     """
-    Clicks the mouse at coordinates or current position.
-    Prefer using click_element() when you know the text of what to click!
-    
+    Performs mouse actions.
+    Actions: 'move', 'click', 'double_click', 'drag', 'scroll'.
     Args:
-        x: X coordinate (optional)
-        y: Y coordinate (optional)  
-        button: 'left', 'right', or 'middle'
+        action: 'move', 'click', 'double_click', 'drag', or 'scroll'.
+        x, y: Coordinates (optional for click/scroll, required for move/drag).
+        button: 'left', 'right', 'middle' (for click).
+        clicks: Number of clicks (for scroll).
+        duration: Drag duration.
     """
-    if x is not None and y is not None:
-        pyautogui.click(x=x, y=y, button=button)
-        return f"Clicked {button} button at ({x}, {y})"
-    else:
-        pyautogui.click(button=button)
-        return f"Clicked {button} button at current position"
-
-@mcp.tool()
-def double_click(x: int = None, y: int = None) -> str:
-    """Double-clicks the left mouse button."""
-    if x is not None and y is not None:
-        pyautogui.doubleClick(x=x, y=y)
-        return f"Double-clicked at ({x}, {y})"
-    else:
-        pyautogui.doubleClick()
-        return "Double-clicked at current position"
-
-@mcp.tool()
-def drag_mouse(x: int, y: int, duration: float = 0.5) -> str:
-    """Drags the mouse from current position to (x, y)."""
-    pyautogui.dragTo(x, y, duration=duration)
-    return f"Dragged mouse to ({x}, {y})"
-
-@mcp.tool()
-def scroll(clicks: int, x: int = None, y: int = None) -> str:
-    """
-    Scrolls the mouse wheel.
-    
-    Args:
-        clicks: Number of scroll clicks (positive = up, negative = down)
-        x: Optional x position to scroll at
-        y: Optional y position to scroll at
-    """
-    if x is not None and y is not None:
-        pyautogui.scroll(clicks, x=x, y=y)
-        return f"Scrolled {clicks} clicks at ({x}, {y})"
-    else:
-        pyautogui.scroll(clicks)
-        return f"Scrolled {clicks} clicks"
+    try:
+        if action == 'move':
+            if x is None or y is None: return "Error: x and y required for move"
+            pyautogui.moveTo(x, y)
+            return f"Moved to ({x}, {y})"
+        elif action == 'click':
+            if x is not None and y is not None:
+                pyautogui.click(x=x, y=y, button=button)
+                return f"Clicked {button} at ({x}, {y})"
+            else:
+                pyautogui.click(button=button)
+                return f"Clicked {button} at current pos"
+        elif action == 'double_click':
+            if x is not None and y is not None:
+                pyautogui.doubleClick(x=x, y=y)
+                return f"Double-clicked at ({x}, {y})"
+            else:
+                pyautogui.doubleClick()
+                return "Double-clicked at current pos"
+        elif action == 'drag':
+            if x is None or y is None: return "Error: x and y required for drag"
+            pyautogui.dragTo(x, y, duration=duration)
+            return f"Dragged to ({x}, {y})"
+        elif action == 'scroll':
+            if x is not None and y is not None:
+                pyautogui.scroll(clicks, x=x, y=y)
+            else:
+                pyautogui.scroll(clicks)
+            return f"Scrolled {clicks} clicks"
+        else:
+            return f"Unknown action: {action}"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 # --- Keyboard Control ---
 
 @mcp.tool()
-def type_text(text: str, interval: float = 0.0) -> str:
-    """Types the given text string."""
-    pyautogui.write(text, interval=interval)
-    return f"Typed: {text}"
-
-@mcp.tool()
-def press_key(key: str) -> str:
+def keyboard_action(action: str, text: str = None, key: str = None, keys: list[str] = None, interval: float = 0.0) -> str:
     """
-    Presses a specific key.
-    Examples: 'enter', 'esc', 'tab', 'space', 'backspace', 'delete',
-              'up', 'down', 'left', 'right', 'home', 'end',
-              'f1'-'f12', 'win', 'alt', 'ctrl', 'shift'
+    Performs keyboard actions.
+    Actions: 'type', 'press', 'hotkey'.
+    Args:
+        action: 'type', 'press', or 'hotkey'.
+        text: Text to type.
+        key: Key to press.
+        keys: List of keys for hotkey.
+        interval: Typing interval.
     """
-    pyautogui.press(key)
-    return f"Pressed key: {key}"
-
-@mcp.tool()
-def hotkey(keys: list[str]) -> str:
-    """
-    Presses a combination of keys simultaneously.
-    Examples: ['ctrl', 'c'], ['alt', 'tab'], ['ctrl', 'shift', 's']
-    """
-    pyautogui.hotkey(*keys)
-    return f"Pressed hotkey: {'+'.join(keys)}"
+    try:
+        if action == 'type':
+            if not text: return "Error: text required"
+            pyautogui.write(text, interval=interval)
+            return f"Typed: {text}"
+        elif action == 'press':
+            if not key: return "Error: key required"
+            pyautogui.press(key)
+            return f"Pressed: {key}"
+        elif action == 'hotkey':
+            if not keys: return "Error: keys required"
+            pyautogui.hotkey(*keys)
+            return f"Hotkey: {'+'.join(keys)}"
+        else:
+            return f"Unknown action: {action}"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 # --- Fallback Screenshot (use sparingly!) ---
 
